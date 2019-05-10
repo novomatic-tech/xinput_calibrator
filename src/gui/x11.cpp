@@ -45,6 +45,7 @@
 
 
 const char* GuiCalibratorX11::colors[GuiCalibratorX11::NUM_COLORS] = {"BLACK", "WHITE", "GRAY", "DIMGRAY", "RED"};
+const char* GuiCalibratorX11::geometry_by_device_prefix = "device:";
 
 #ifndef HAVE_TIMERFD
 void sigalarm_handler(int num);
@@ -81,24 +82,37 @@ GuiCalibratorX11::GuiCalibratorX11(Calibrator* calibrator0)
         }
     }
 
-    int width, height;
-    detect_display_size(width, height);
-    set_display_size(width, height);
-
-    fprintf(stderr, "INFO: width=%d, height=%d\n", 
-        display_width, display_height);
+    int width = 0, height = 0;
+    int x = 0, y = 0;
 
     // parse geometry string
     const char* geo = calibrator->get_geometry();
     if (geo != NULL) {
-        int gw,gh;
-        int res = sscanf(geo,"%dx%d",&gw,&gh);
-        if (res != 2) {
-            fprintf(stderr,"Warning: error parsing geometry string - using defaults.\n");
+        if (strncmp(geometry_by_device_prefix, geo, strlen(geometry_by_device_prefix)) == 0) {
+            if (detect_device_size_and_position(geo + strlen(geometry_by_device_prefix), width, height, x, y)) {
+                set_display_size_and_position(width, height, x, y);
+            } else {
+                XCloseDisplay(display);
+                throw std::runtime_error("Can't get device geometry");
+            }
         } else {
-            set_display_size( gw, gh );
+            int res = sscanf(geo, "%dx%d+%d+%d", &width, &height, &x, &y);
+            if (res == 4) {
+                set_display_size_and_position(width, height, x, y);
+            } else if (res == 2) {
+                set_display_size(width, height);
+            } else {
+                XCloseDisplay(display);
+                throw std::runtime_error("Can't parse geometry string");
+            }
         }
+    } else {
+        detect_display_size(width, height);
+        set_display_size(width, height);
     }
+
+    fprintf(stderr, "INFO: width=%d, height=%d\n", 
+        display_width, display_height);
 
     // Register events on the window
     XSetWindowAttributes attributes;
@@ -106,7 +120,7 @@ GuiCalibratorX11::GuiCalibratorX11(Calibrator* calibrator0)
     attributes.event_mask = ExposureMask | KeyPressMask | ButtonPressMask;
 
     win = XCreateWindow(display, RootWindow(display, screen_num),
-                0, 0, display_width, display_height, 0,
+                display_x, display_y, display_width, display_height, 0,
                 CopyFromParent, InputOutput, CopyFromParent,
                 CWOverrideRedirect | CWEventMask,
                 &attributes);
@@ -130,6 +144,15 @@ GuiCalibratorX11::GuiCalibratorX11(Calibrator* calibrator0)
 
     gc = XCreateGC(display, win, 0, NULL);
     XSetFont(display, gc, font_info->fid);
+
+    //Size hints
+    XSizeHints* size_hints = XAllocSizeHints();
+    size_hints->flags = PPosition | PSize;
+    size_hints->x = display_x;
+    size_hints->y = display_y;
+    size_hints->width = display_width;
+    size_hints->height = display_height;
+    XSetWMNormalHints(display, win, size_hints);
 
     // Setup timer for animation
 #ifdef HAVE_TIMERFD
@@ -189,11 +212,56 @@ void  GuiCalibratorX11::detect_display_size( int &width, int &height) {
 
 }
 
+bool GuiCalibratorX11::detect_device_size_and_position(const char *name, int &width, int &height, int &x, int &y)
+{
+    bool device_found = false;
+    if( name == 0 || name[0]==0 )
+    {
+        return device_found;
+    }
+#ifdef HAVE_X11_XRANDR
+    // test
+    XRRScreenResources* scrres = XRRGetScreenResources( display, RootWindow (display, screen_num));
+    if( scrres )
+    {
+        for( int i=0; i < scrres->noutput; i++ )
+        {
+            XRROutputInfo* outInfo = XRRGetOutputInfo( display, scrres, scrres->outputs[i]);
+            if( outInfo == 0 )
+            {
+                continue;
+            }
+            fprintf(stderr, "INFO: device name=%s\n", outInfo->name);
+            if( outInfo->name == 0 || strcmp( name, outInfo->name ) != 0 || outInfo->connection != 0 )
+            {
+                XRRFreeOutputInfo( outInfo );
+                continue;
+            }
+            XRRCrtcInfo* crtInfo = XRRGetCrtcInfo( display, scrres, outInfo->crtc);
+            if( crtInfo )
+            {
+                width = crtInfo->width;
+                height = crtInfo->height;
+                x = crtInfo->x;
+                y = crtInfo->y;
+                device_found = true;
+                XRRFreeCrtcInfo( crtInfo );
+            }
+            XRRFreeOutputInfo( outInfo );
+            break;
+        }
+        XRRFreeScreenResources( scrres );
+    }
+#endif
+    return device_found;
+}
+
 GuiCalibratorX11::~GuiCalibratorX11()
 {
     XUngrabPointer(display, CurrentTime);
     XUngrabKeyboard(display, CurrentTime);
     XFreeGC(display, gc);
+    XFree(size_hints);
     XCloseDisplay(display);
 }
 
@@ -211,6 +279,12 @@ void GuiCalibratorX11::set_display_size(int width, int height) {
 
     // reset calibration if already started
     calibrator->reset();
+}
+
+void GuiCalibratorX11::set_display_size_and_position(int width, int height, int x, int y) {
+    display_x = x;
+    display_y = y;
+    set_display_size(width, height);
 }
 
 void GuiCalibratorX11::redraw()

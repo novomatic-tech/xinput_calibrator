@@ -25,6 +25,7 @@
 
 #include "calibrator.hh"
 #include <list>
+#include <X11/Xutil.h>
 
 /*******************************************
  * X11 class for the the calibration GUI
@@ -43,6 +44,7 @@ private:
     Calibrator* calibrator;
     double X[NUM_POINTS], Y[NUM_POINTS];
     int display_width, display_height;
+    int display_x, display_y;
     int time_elapsed;
     std::list<std::string> display_texts;
 
@@ -51,6 +53,7 @@ private:
     int screen_num;
     Window win;
     GC gc;
+    XSizeHints* size_hints;
     XFontStruct* font_info;
 
 #ifdef HAVE_TIMERFD
@@ -62,6 +65,9 @@ private:
     static const char* colors[NUM_COLORS];
     unsigned long pixel[NUM_COLORS];
 
+    // dicives
+    static const char* geometry_by_device_prefix;
+
     // Signal handlers
     void on_timer_signal();
     void on_expose_event();
@@ -69,7 +75,9 @@ private:
 
     // Helper functions
     void detect_display_size(int &width, int &height);
+    bool detect_device_size_and_position(const char *name, int &width, int &height, int &x, int &y);
     void set_display_size(int width, int height);
+    void set_display_size_and_position(int width, int height, int x, int y);
     void redraw();
     void draw_message(const char* msg);
 
